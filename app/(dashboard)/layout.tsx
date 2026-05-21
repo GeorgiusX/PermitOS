@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { Sidebar, type SidebarUser } from "@/components/layout/Sidebar";
 import { createClient } from "@/lib/supabase/server";
-import type { UserRole } from "@/types/database";
+import type { UserRole } from "@/types/db";
 
 const ROLE_LABELS: Record<UserRole, string> = {
   private_provider: "Private Provider",

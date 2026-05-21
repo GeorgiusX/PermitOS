@@ -2,7 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import type { UserRole } from "@/types/database";
+import type { UserRole } from "@/types/db";
 
 export type AuthState = { error: string } | null;
 
