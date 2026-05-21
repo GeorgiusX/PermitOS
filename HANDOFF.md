@@ -30,19 +30,22 @@ AI-native permit-compliance platform for Florida (Miami-Dade). Rebuild of an old
   schema (`0002`), seed = 5 municipalities + 26 rules (`supabase/seed.sql`). All applied live.
 - Types: canonical types generated from live DB in `types/database.ts`; clean aliases in `types/db.ts`
   (import `Project`, `UserRole`, etc. from `@/types/db`). Typed joins work.
-- Data layer: `lib/data/projects.ts` — `getProjects()`, `getProjectDetail(id)` (typed joins).
-- Infra: deployed to Vercel; env vars `NEXT_PUBLIC_SUPABASE_URL` + `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-  set in Vercel dashboard. Email confirmation is OFF in Supabase (dev). `.env.local` set locally.
+- Data layer: `lib/data/projects.ts` — `getProjects()`, `getProjectDetail(id)` (typed joins),
+  `projectStatusBadge()`, `projectPipeline()` (7-stage), `filterProjects()` helpers.
+  `lib/data/municipalities.ts` — `getMunicipalities()`.
+- Infra: deployed to Vercel; env vars set. Email confirmation OFF in Supabase (dev).
+- Sprint 2: projects dashboard live — filter tabs (All/In Review/Needs Action/Submitted/Approved),
+  project cards with 7-segment pipeline + status badges, right-hand detail panel (docs & AI
+  analysis, workflow timeline, team). URL search params (`?filter=&id=`) drive state.
+  New project form at `/projects/new` (wizard step 1) — server action creates project → member
+  → 7 workflow_steps in correct RLS order (pre-generated UUID). Deployed + TypeScript clean.
 
-## Next — Sprint 2 (in progress)
-1. **New Project creation flow** (task): server action to insert project + creator membership +
-   seed 7 workflow steps; a "New Project" form (wizard step 1). Use `crypto.randomUUID()` for the
-   project id (RLS blocks INSERT…RETURNING before the membership row exists; order =
-   project → member → workflow_steps).
-2. **Projects dashboard UI**: replace `app/(dashboard)/projects/page.tsx` placeholder with the real
-   mockup view — filter tabs, project cards (pipeline/badges/team), right-hand detail panel
-   (docs & AI analysis, risk, workflow timeline, team), empty state.
-   Need a status→badge and status→pipeline(7) mapping helper (not built yet).
+## Next — Sprint 3
+1. **AI Compliance Report** (`/compliance`): replace placeholder with real report view. Port
+   `_legacy/api/analyze.js` logic; rules from `municipality_rules` table (not hardcoded).
+   Async AI analysis via Supabase Edge Function + Realtime status updates.
+2. **New Project wizard steps 2 & 3**: document upload (step 2) and AI analysis processing
+   view (step 3). Currently form creates the project and redirects immediately.
 
 ## Then (later sprints)
 3 = AI Compliance Report + PDF viewer (port `_legacy/api/analyze.js` logic; rules come from
