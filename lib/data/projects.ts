@@ -8,6 +8,73 @@ import type {
   DocumentStatus,
 } from "@/types/db";
 
+// ── Badge helpers ────────────────────────────────────────────────────────────
+
+export type BadgeVariant =
+  | "gray"
+  | "info"
+  | "warn"
+  | "success"
+  | "danger"
+  | "accent";
+
+export type StatusBadge = { text: string; variant: BadgeVariant };
+
+const STATUS_BADGE: Record<ProjectStatus, StatusBadge> = {
+  draft: { text: "Draft", variant: "gray" },
+  ai_review_pending: { text: "AI review pending", variant: "info" },
+  ai_review_complete: { text: "AI review complete", variant: "info" },
+  provider_review: { text: "Provider review", variant: "warn" },
+  revision_requested: { text: "Revision requested", variant: "danger" },
+  approved: { text: "Approved", variant: "success" },
+  submitted: { text: "Submitted to city", variant: "success" },
+  rfi_received: { text: "City RFI received", variant: "danger" },
+  permit_issued: { text: "Permit issued", variant: "success" },
+  rejected: { text: "Rejected", variant: "danger" },
+};
+
+export function projectStatusBadge(status: ProjectStatus): StatusBadge {
+  return STATUS_BADGE[status] ?? { text: status, variant: "gray" };
+}
+
+/** 7-element array: 1 = done, 0.5 = in-progress, 0 = pending */
+const STATUS_PIPELINE: Record<ProjectStatus, number[]> = {
+  draft: [0, 0, 0, 0, 0, 0, 0],
+  ai_review_pending: [1, 0.5, 0, 0, 0, 0, 0],
+  ai_review_complete: [1, 1, 0, 0, 0, 0, 0],
+  provider_review: [1, 1, 0.5, 0, 0, 0, 0],
+  revision_requested: [1, 1, 1, 0.5, 0, 0, 0],
+  approved: [1, 1, 1, 1, 1, 0, 0],
+  submitted: [1, 1, 1, 1, 1, 0.5, 0],
+  rfi_received: [1, 1, 1, 1, 1, 1, 0.5],
+  permit_issued: [1, 1, 1, 1, 1, 1, 1],
+  rejected: [1, 1, 1, 0, 0, 0, 0],
+};
+
+export function projectPipeline(status: ProjectStatus): number[] {
+  return STATUS_PIPELINE[status] ?? [0, 0, 0, 0, 0, 0, 0];
+}
+
+// ── Filter helpers ────────────────────────────────────────────────────────────
+
+export type FilterKey = "all" | "review" | "action" | "submitted" | "approved";
+
+const FILTER_MAP: Partial<Record<FilterKey, ProjectStatus[]>> = {
+  review: ["ai_review_pending", "ai_review_complete", "provider_review"],
+  action: ["revision_requested", "rfi_received"],
+  submitted: ["submitted"],
+  approved: ["approved", "permit_issued"],
+};
+
+export function filterProjects<T extends { status: ProjectStatus }>(
+  projects: T[],
+  filter: string,
+): T[] {
+  const statuses = FILTER_MAP[filter as FilterKey];
+  if (!statuses) return projects;
+  return projects.filter((p) => statuses.includes(p.status));
+}
+
 export type ProjectMemberView = {
   role: UserRole;
   name: string;
