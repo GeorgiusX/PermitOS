@@ -52,27 +52,29 @@ AI-native permit-compliance platform for Florida (Miami-Dade). Rebuild of an old
   Seeded a realistic demo project (Miami-Dade landscape, 1 critical + 2 advisories) owned by
   George so dashboard + report render with real data.
 
-## ⚠️ Sprint 3 follow-ups / known gaps
-- **AI analyze action is UNTESTED end-to-end** — no document upload yet (no file in Storage),
-  and **`GEMINI_API_KEY` must be set** in `.env.local` AND Vercel env (both currently empty; the
-  working key from the old MVP lives in the old Vercel project env). Model override via
-  `GEMINI_MODEL`. The button only appears for projects that have an uploaded doc + no report yet.
-- Storage bucket is assumed to be named `documents` — confirm/create it when wiring upload.
+- Sprint 4 ✓: Document upload (wizard step 2 → `/projects/new/upload?id=…`), `uploadDocument`
+  server action (Storage + DB row), Documents screen (`/documents` — grouped by project, status
+  badges, link to compliance report), Storage bucket `documents` created (migration 0004, auth
+  RLS), Detail Panel gets "Upload plan set" CTA when no docs present.
+  **`GEMINI_API_KEY` added to `.env.local`. Must also be set in Vercel env** (Production +
+  Preview) — without it the AI analyze action returns an error. Model override via `GEMINI_MODEL`.
+
+## ⚠️ Known gaps / follow-ups
+- **Test end-to-end loop** once `GEMINI_API_KEY` is set in Vercel: upload a PDF →
+  "Run AI Analysis" on compliance page → report should populate.
+- `SUPABASE_SERVICE_ROLE_KEY` in `.env.local` is still a placeholder (not needed yet).
 - Export (report) and "Add Comment" buttons are present but intentionally disabled (no-ops).
+- Vercel function timeout: `analyzeDocument` can take 30-60s for large PDFs — may need
+  `export const maxDuration = 60` in the compliance page or a move to Edge Function + Realtime.
 
-## Next — Sprint 4
-1. **Document upload** (New Project wizard step 2 + Documents screen): Supabase Storage upload,
-   create `documents` rows with `storage_path`/`mime_type`. This unblocks the AI analyze action
-   end-to-end (then test the full upload → analyze → report loop).
-2. **Async analysis**: move `analyzeDocument` to a Supabase Edge Function + Realtime status so
-   the UI shows live progress instead of a blocking server action.
-3. **Remaining screens**: Documents, Communications, Deadlines, Checklist, Audit, Patterns,
-   Municipality DB.
-
-## Then (later sprints)
-3 = AI Compliance Report + PDF viewer (port `_legacy/api/analyze.js` logic; rules come from
-`municipality_rules` table, not hardcoded). 4 = Documents/Communications/Deadlines. 5 = Checklist/
-Audit/Patterns/Municipality DB. Async AI analysis via Supabase Edge Function + Realtime.
+## Next — Sprint 5
+1. **Async analysis** (high value): move `analyzeDocument` to a Supabase Edge Function triggered
+   via a DB insert, with Realtime subscription in the UI to show live progress. Eliminates the
+   blocking server action and Vercel timeout risk.
+2. **Communications screen**: thread + message UI for project discussions (threads/messages tables exist).
+3. **Deadlines screen**: deadline list with urgency badges (deadlines table exists).
+4. **Checklist screen**: per-project checklist items.
+5. **Remaining placeholders**: Audit, Patterns, Municipality DB screens.
 
 ## Workflow stages (7, for seeding workflow_steps)
 Plan set uploaded → AI compliance review → Provider review → Architect revision →

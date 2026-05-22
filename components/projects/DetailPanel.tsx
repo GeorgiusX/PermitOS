@@ -4,6 +4,7 @@ import {
   IconEye,
   IconCircle,
   IconExternalLink,
+  IconUpload,
 } from "@tabler/icons-react";
 import type { ProjectDetail, ProjectDoc } from "@/lib/data/projects";
 import {
@@ -129,8 +130,15 @@ export function DetailPanel({ detail }: { detail: ProjectDetail }) {
             Documents &amp; AI Analysis
           </div>
           {detail.docs.length === 0 ? (
-            <div className="py-3 text-center text-[11px] text-ink-3">
-              No documents uploaded yet
+            <div className="flex flex-col items-center gap-2 py-3">
+              <div className="text-[11px] text-ink-3">No documents uploaded yet</div>
+              <Link
+                href={`/projects/new/upload?id=${detail.id}`}
+                className="flex items-center gap-1 rounded-lg border border-border-strong bg-surface px-2.5 py-1.5 text-[11px] text-ink-2 hover:border-accent hover:bg-accent-dim hover:text-accent"
+              >
+                <IconUpload size={11} />
+                Upload plan set
+              </Link>
             </div>
           ) : (
             detail.docs.map((doc) => <DocRow key={doc.id} doc={doc} />)
