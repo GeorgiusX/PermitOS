@@ -8,9 +8,10 @@ import type {
   IssueSeverity,
 } from "@/types/db";
 
-// Google Gemini Flash — matches the original MVP. Override via env if the
-// model name changes (preview names get retired).
-const MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+// Google Gemini Flash. Default is the newest GA Flash; override via env.
+// NOTE: thinkingLevel (below) is a Gemini-3.x control — if you override to a
+// 2.x model, swap it for thinkingConfig.thinkingBudget.
+const MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash";
 const STORAGE_BUCKET = "documents";
 
 const SEVERITIES: IssueSeverity[] = ["critical", "advisory", "pass"];
@@ -76,9 +77,9 @@ async function callGemini(
         temperature: 0.1,
         maxOutputTokens: 8000,
         responseMimeType: "application/json",
-        // Gemini 2.5 Flash thinks by default; left on, reasoning tokens can
-        // exhaust the budget and truncate the JSON. Disable for extraction.
-        thinkingConfig: { thinkingBudget: 0 },
+        // Gemini Flash thinks by default; for structured extraction keep it
+        // minimal so reasoning tokens don't crowd out / truncate the JSON.
+        thinkingConfig: { thinkingLevel: "low" },
       },
     }),
   });
