@@ -1,5 +1,7 @@
 import { redirect } from "next/navigation";
 import { Sidebar, type SidebarUser } from "@/components/layout/Sidebar";
+import { AnalysisProvider } from "@/contexts/AnalysisContext";
+import { AnalysisIndicator } from "@/components/layout/AnalysisIndicator";
 import { createClient } from "@/lib/supabase/server";
 import type { UserRole } from "@/types/db";
 
@@ -37,9 +39,12 @@ export default async function DashboardLayout({
   };
 
   return (
-    <div className="flex h-screen overflow-hidden bg-surface-3">
-      <Sidebar user={sidebarUser} />
-      <main className="flex flex-1 flex-col overflow-hidden">{children}</main>
-    </div>
+    <AnalysisProvider>
+      <div className="flex h-screen overflow-hidden bg-surface-3">
+        <Sidebar user={sidebarUser} />
+        <main className="flex flex-1 flex-col overflow-hidden">{children}</main>
+        <AnalysisIndicator />
+      </div>
+    </AnalysisProvider>
   );
 }
