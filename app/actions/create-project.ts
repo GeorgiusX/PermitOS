@@ -81,5 +81,5 @@ export async function createProject(
     .insert(steps);
   if (stepsError) return { error: stepsError.message };
 
-  redirect(`/projects?id=${projectId}`);
+  redirect(`/projects/new/upload?id=${projectId}`);
 }
