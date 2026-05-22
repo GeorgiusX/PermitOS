@@ -6,6 +6,9 @@
  * API:     POST /energovprod/selfservice/api/energov/search/search
  * Records: ~389,850 permits
  *
+ * The API has an Elasticsearch max_result_window of 10,000 records per query.
+ * We work around this by iterating through quarterly date windows on ApplyDate.
+ *
  * Run:
  *   npx tsx --env-file=.env.local scripts/ingest-miami-beach-permits.ts
  */
@@ -35,9 +38,14 @@ const supabase = createClient(
 );
 
 // ---------------------------------------------------------------------------
-// Request body — exact structure the EnerGov portal sends (payload-captured)
+// Request body
 // ---------------------------------------------------------------------------
-function buildBody(pageNumber: number, pageSize: number) {
+function buildBody(
+  pageNumber: number,
+  pageSize: number,
+  applyDateFrom: string | null = null,
+  applyDateTo: string | null = null,
+) {
   return {
     Keyword: "",
     ExactMatch: true,
@@ -59,7 +67,9 @@ function buildBody(pageNumber: number, pageSize: number) {
       PermitStatusId: "none", ProjectName: null, IssueDateFrom: null,
       IssueDateTo: null, Address: null, Description: null,
       ExpireDateFrom: null, ExpireDateTo: null, FinalDateFrom: null,
-      FinalDateTo: null, ApplyDateFrom: null, ApplyDateTo: null,
+      FinalDateTo: null,
+      ApplyDateFrom: applyDateFrom,
+      ApplyDateTo: applyDateTo,
       SearchMainAddress: false, ContactId: null, TypeId: null,
       WorkClassIds: null, ParcelNumber: null, ExcludeCases: null,
       EnableDescriptionSearch: false,
@@ -142,7 +152,6 @@ function buildBody(pageNumber: number, pageSize: number) {
       ExcludeCases: null, EnableDescriptionSearch: false,
       PageNumber: 0, PageSize: 0, SortBy: null, SortAscending: false,
     },
-    // Required SortList arrays
     PlanSortList: [
       { Key: "relevance", Value: "Relevance" },
       { Key: "PlanNumber.keyword", Value: "Plan Number" },
@@ -287,7 +296,6 @@ function toDate(val: unknown): string | null {
 
 function cleanZip(raw: string | undefined): string | null {
   if (!raw) return null;
-  // Some zips come through as negative: "-331394415" → strip leading dash
   const z = raw.replace(/^-/, "").trim();
   return z || null;
 }
@@ -318,21 +326,27 @@ function mapRecord(p: EnerGovPermit): PermitRow {
 // ---------------------------------------------------------------------------
 // Fetch + upsert
 // ---------------------------------------------------------------------------
-async function fetchPage(pageNumber: number): Promise<EnerGovResponse> {
+const TENANT_HEADERS = {
+  "Content-Type": "application/json;charset=UTF-8",
+  Accept: "application/json, text/plain, */*",
+  "X-Requested-With": "XMLHttpRequest",
+  Origin: "https://energovcss.miamibeachfl.gov",
+  Referer: "https://energovcss.miamibeachfl.gov/EnerGovProd/SelfService",
+  tenantId: "3",
+  tenantName: "miamibeachflprod2",
+  "Tyler-TenantUrl": "MiamiBeachFLProd",
+  "Tyler-Tenant-Culture": "en-US",
+};
+
+async function fetchPage(
+  pageNumber: number,
+  dateFrom: string | null,
+  dateTo: string | null,
+): Promise<EnerGovResponse> {
   const res = await fetch(API_URL, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json;charset=UTF-8",
-      Accept: "application/json, text/plain, */*",
-      "X-Requested-With": "XMLHttpRequest",
-      Origin: "https://energovcss.miamibeachfl.gov",
-      Referer: "https://energovcss.miamibeachfl.gov/EnerGovProd/SelfService",
-      tenantId: "3",
-      tenantName: "miamibeachflprod2",
-      "Tyler-TenantUrl": "MiamiBeachFLProd",
-      "Tyler-Tenant-Culture": "en-US",
-    },
-    body: JSON.stringify(buildBody(pageNumber, PAGE_SIZE)),
+    headers: TENANT_HEADERS,
+    body: JSON.stringify(buildBody(pageNumber, PAGE_SIZE, dateFrom, dateTo)),
   });
 
   if (!res.ok) {
@@ -350,41 +364,84 @@ async function upsertBatch(rows: PermitRow[]): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Date window generator — quarterly from startYear to today
+// ---------------------------------------------------------------------------
+function* dateWindows(startYear: number): Generator<{ from: string; to: string }> {
+  const now = new Date();
+  let year = startYear;
+  let quarter = 0; // 0-3
+
+  while (true) {
+    const monthStart = quarter * 3;
+    const from = new Date(year, monthStart, 1);
+    const to = new Date(year, monthStart + 3, 0); // last day of quarter
+
+    yield {
+      from: `${from.getFullYear()}-${String(from.getMonth() + 1).padStart(2, "0")}-01`,
+      to: `${to.getFullYear()}-${String(to.getMonth() + 1).padStart(2, "0")}-${String(to.getDate()).padStart(2, "0")}`,
+    };
+
+    if (from > now) break;
+
+    quarter++;
+    if (quarter === 4) {
+      quarter = 0;
+      year++;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 async function main() {
-  console.log("=== Miami Beach city permit ingestion ===");
+  console.log("=== Miami Beach city permit ingestion (date-windowed) ===");
   console.log(`Endpoint: ${API_URL}`);
 
-  const first = await fetchPage(1);
-  if (!first.Success) throw new Error("API returned Success: false on page 1");
+  let totalIngested = 0;
+  let windowCount = 0;
 
-  const total = first.Result?.PermitsFound ?? 0;
-  const totalPages = Math.ceil(total / PAGE_SIZE);
-  const firstBatch = first.Result?.EntityResults ?? [];
+  for (const { from, to } of dateWindows(1980)) {
+    windowCount++;
+    let windowIngested = 0;
 
-  console.log(`Total permits: ${total.toLocaleString()} across ${totalPages.toLocaleString()} pages`);
+    for (let page = 1; ; page++) {
+      process.stdout.write(
+        `\r[${from} → ${to}] page ${page} — window ${windowIngested} — total ${totalIngested.toLocaleString()}  `,
+      );
 
-  let ingested = 0;
+      const data = await fetchPage(page, from, to);
 
-  for (let page = 1; page <= totalPages; page++) {
-    process.stdout.write(
-      `\rPage ${page}/${totalPages} — ingested ${ingested.toLocaleString()} / ${total.toLocaleString()}  `,
-    );
+      if (!data.Success && page === 1) {
+        console.warn(`\nSkipping window ${from}→${to}: API returned Success=false`);
+        break;
+      }
 
-    const batch = page === 1 ? firstBatch : (await fetchPage(page)).Result?.EntityResults ?? [];
-    if (batch.length === 0) break;
+      const batch = data.Result?.EntityResults ?? [];
+      if (batch.length === 0) break;
 
-    for (let i = 0; i < batch.length; i += UPSERT_BATCH) {
-      await upsertBatch(batch.slice(i, i + UPSERT_BATCH).map(mapRecord));
+      for (let i = 0; i < batch.length; i += UPSERT_BATCH) {
+        await upsertBatch(batch.slice(i, i + UPSERT_BATCH).map(mapRecord));
+      }
+
+      windowIngested += batch.length;
+      totalIngested += batch.length;
+
+      // Hit the 10k Elasticsearch wall — warn but keep going (upsert already saved them)
+      if (windowIngested >= 9_900) {
+        console.warn(`\nWindow ${from}→${to} hit 10k limit (${windowIngested} records) — splitting may be needed`);
+        break;
+      }
+
+      if (batch.length < PAGE_SIZE) break;
+
+      await new Promise((r) => setTimeout(r, DELAY_MS));
     }
 
-    ingested += batch.length;
-
-    if (page < totalPages) await new Promise((r) => setTimeout(r, DELAY_MS));
+    await new Promise((r) => setTimeout(r, DELAY_MS));
   }
 
-  console.log(`\n\nDone. ${ingested.toLocaleString()} Miami Beach permits upserted.`);
+  console.log(`\n\nDone. ${totalIngested.toLocaleString()} Miami Beach permits upserted across ${windowCount} date windows.`);
 }
 
 main().catch((err) => {
