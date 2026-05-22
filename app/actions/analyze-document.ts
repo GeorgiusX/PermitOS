@@ -76,6 +76,9 @@ async function callGemini(
         temperature: 0.1,
         maxOutputTokens: 8000,
         responseMimeType: "application/json",
+        // Gemini 2.5 Flash thinks by default; left on, reasoning tokens can
+        // exhaust the budget and truncate the JSON. Disable for extraction.
+        thinkingConfig: { thinkingBudget: 0 },
       },
     }),
   });
