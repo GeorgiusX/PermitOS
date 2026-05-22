@@ -39,13 +39,32 @@ AI-native permit-compliance platform for Florida (Miami-Dade). Rebuild of an old
   analysis, workflow timeline, team). URL search params (`?filter=&id=`) drive state.
   New project form at `/projects/new` (wizard step 1) — server action creates project → member
   → 7 workflow_steps in correct RLS order (pre-generated UUID). Deployed + TypeScript clean.
+- Sprint 3: AI Compliance Report (`/compliance?project=<id>`) — breadcrumb header, doc tabs,
+  risk box, filterable/expandable issue cards, annotated plan viewer (SVG callouts from issue
+  callout_x/y), action bar. Reads via `lib/data/compliance.ts` (`getComplianceReport`).
+  Mutations (`app/actions/report-actions.ts`): approve report / request revision / per-issue
+  status — all RLS member writes. AI pipeline (`app/actions/analyze-document.ts`): loads
+  `municipality_rules` from DB → per-municipality CACHED Claude system prompt (claude-sonnet-4-6,
+  prompt caching + structured JSON output) → downloads doc from Storage bucket `documents` →
+  writes compliance_report + issues + updates project/doc status. Uses `@anthropic-ai/sdk`.
+  Seeded a realistic demo project (Miami-Dade landscape, 1 critical + 2 advisories) owned by
+  George so dashboard + report render with real data.
 
-## Next — Sprint 3
-1. **AI Compliance Report** (`/compliance`): replace placeholder with real report view. Port
-   `_legacy/api/analyze.js` logic; rules from `municipality_rules` table (not hardcoded).
-   Async AI analysis via Supabase Edge Function + Realtime status updates.
-2. **New Project wizard steps 2 & 3**: document upload (step 2) and AI analysis processing
-   view (step 3). Currently form creates the project and redirects immediately.
+## ⚠️ Sprint 3 follow-ups / known gaps
+- **AI analyze action is UNTESTED end-to-end** — no document upload yet (no file in Storage),
+  and `ANTHROPIC_API_KEY` must be added to Vercel env for production. The button only appears
+  for projects that have an uploaded doc + no report yet.
+- Storage bucket is assumed to be named `documents` — confirm/create it when wiring upload.
+- Export (report) and "Add Comment" buttons are present but intentionally disabled (no-ops).
+
+## Next — Sprint 4
+1. **Document upload** (New Project wizard step 2 + Documents screen): Supabase Storage upload,
+   create `documents` rows with `storage_path`/`mime_type`. This unblocks the AI analyze action
+   end-to-end (then test the full upload → analyze → report loop).
+2. **Async analysis**: move `analyzeDocument` to a Supabase Edge Function + Realtime status so
+   the UI shows live progress instead of a blocking server action.
+3. **Remaining screens**: Documents, Communications, Deadlines, Checklist, Audit, Patterns,
+   Municipality DB.
 
 ## Then (later sprints)
 3 = AI Compliance Report + PDF viewer (port `_legacy/api/analyze.js` logic; rules come from
