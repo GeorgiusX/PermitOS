@@ -124,6 +124,15 @@ export default async function CompliancePage({
     reviewerName = profile?.full_name || profile?.email || "Reviewer";
   }
 
+  // Generate a short-lived signed URL for the uploaded plan document.
+  let documentUrl: string | null = null;
+  if (r.documentStoragePath) {
+    const { data: signed } = await supabase.storage
+      .from("documents")
+      .createSignedUrl(r.documentStoragePath, 3600);
+    documentUrl = signed?.signedUrl ?? null;
+  }
+
   const approved = r.status === "approved" || r.status === "submitted";
 
   return (
@@ -213,6 +222,8 @@ export default async function CompliancePage({
           sheetLabel={sheetLabel}
           projectTitle={r.projectTitle}
           permitNo={r.permitNo}
+          documentUrl={documentUrl}
+          documentMimeType={r.documentMimeType}
         />
       </div>
 

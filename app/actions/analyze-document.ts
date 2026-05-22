@@ -173,6 +173,11 @@ async function runAnalysis(
       .insert(issues.map((i) => ({ report_id: reportId, ...i })));
   }
 
+  // Invalidate before the document status update so the Next.js cache is
+  // already stale when Realtime fires and the browser calls router.refresh().
+  revalidatePath("/compliance");
+  revalidatePath("/projects");
+
   const docStatus =
     criticalCount > 0 ? "issues" : warningCount > 0 ? "advisory" : "clean";
   await supabase
@@ -188,9 +193,6 @@ async function runAnalysis(
       updated_at: new Date().toISOString(),
     })
     .eq("id", projectId);
-
-  revalidatePath("/compliance");
-  revalidatePath("/projects");
 }
 
 export async function analyzeDocument(

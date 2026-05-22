@@ -48,6 +48,8 @@ export type ComplianceReportView = {
   createdAt: string;
   documentName: string | null;
   documentLabel: string | null;
+  documentStoragePath: string | null;
+  documentMimeType: string | null;
   documents: ReportDocTab[];
   issues: ReportIssue[];
 };
@@ -83,7 +85,7 @@ export async function getComplianceReport(
        compliance_reports(
          id, risk_score, summary, critical_count, warning_count, pass_count,
          ai_provider, created_at,
-         document:documents(name, file_label),
+         document:documents(name, file_label, storage_path, mime_type),
          issues(id, severity, title, description, code_ref, location,
                 confidence, discipline, status, callout_x, callout_y)
        )`,
@@ -167,6 +169,8 @@ export async function getComplianceReport(
       createdAt: latest.created_at,
       documentName: latest.document?.name ?? null,
       documentLabel: latest.document?.file_label ?? null,
+      documentStoragePath: latest.document?.storage_path ?? null,
+      documentMimeType: latest.document?.mime_type ?? null,
       documents,
       issues,
     },
