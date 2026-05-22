@@ -44,16 +44,19 @@ AI-native permit-compliance platform for Florida (Miami-Dade). Rebuild of an old
   callout_x/y), action bar. Reads via `lib/data/compliance.ts` (`getComplianceReport`).
   Mutations (`app/actions/report-actions.ts`): approve report / request revision / per-issue
   status — all RLS member writes. AI pipeline (`app/actions/analyze-document.ts`): loads
-  `municipality_rules` from DB → per-municipality CACHED Claude system prompt (claude-sonnet-4-6,
-  prompt caching + structured JSON output) → downloads doc from Storage bucket `documents` →
-  writes compliance_report + issues + updates project/doc status. Uses `@anthropic-ai/sdk`.
+  `municipality_rules` from DB → builds system prompt → sends doc to **Google Gemini Flash**
+  (`gemini-2.5-flash`, REST generateContent, responseMimeType application/json, defensive enum
+  normalization) → downloads doc from Storage bucket `documents` → writes compliance_report +
+  issues + updates project/doc status. Provider = Gemini (matches original MVP); plain fetch, no
+  AI SDK. `ai_provider` recorded as `gemini`.
   Seeded a realistic demo project (Miami-Dade landscape, 1 critical + 2 advisories) owned by
   George so dashboard + report render with real data.
 
 ## ⚠️ Sprint 3 follow-ups / known gaps
 - **AI analyze action is UNTESTED end-to-end** — no document upload yet (no file in Storage),
-  and `ANTHROPIC_API_KEY` must be added to Vercel env for production. The button only appears
-  for projects that have an uploaded doc + no report yet.
+  and **`GEMINI_API_KEY` must be set** in `.env.local` AND Vercel env (both currently empty; the
+  working key from the old MVP lives in the old Vercel project env). Model override via
+  `GEMINI_MODEL`. The button only appears for projects that have an uploaded doc + no report yet.
 - Storage bucket is assumed to be named `documents` — confirm/create it when wiring upload.
 - Export (report) and "Add Comment" buttons are present but intentionally disabled (no-ops).
 

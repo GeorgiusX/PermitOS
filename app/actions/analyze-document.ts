@@ -1,6 +1,5 @@
 "use server";
 
-import Anthropic from "@anthropic-ai/sdk";
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import type {
@@ -9,9 +8,13 @@ import type {
   IssueSeverity,
 } from "@/types/db";
 
-const MODEL = "claude-sonnet-4-6";
+// Google Gemini Flash — matches the original MVP. Override via env if the
+// model name changes (preview names get retired).
+const MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 const STORAGE_BUCKET = "documents";
 
+const SEVERITIES: IssueSeverity[] = ["critical", "advisory", "pass"];
+const CONFIDENCES: IssueConfidence[] = ["strong", "medium", "weak"];
 const DISCIPLINES: DocumentDiscipline[] = [
   "architectural",
   "landscape",
@@ -24,71 +27,78 @@ const DISCIPLINES: DocumentDiscipline[] = [
   "other",
 ];
 
-type AnalyzedIssue = {
-  title: string;
-  severity: IssueSeverity;
-  code: string;
-  description: string;
-  fix: string;
-  location: string;
-  confidence: IssueConfidence;
-  discipline: DocumentDiscipline;
+type RawIssue = {
+  title?: string;
+  severity?: string;
+  code?: string;
+  description?: string;
+  fix?: string;
+  location?: string;
+  confidence?: string;
+  discipline?: string;
 };
 
-type AnalysisResult = {
-  summary: string;
-  risk_score: number;
-  issues: AnalyzedIssue[];
+type RawResult = {
+  summary?: string;
+  risk_score?: number;
+  issues?: RawIssue[];
 };
-
-// Strict JSON schema for structured output. No numeric/length constraints
-// (unsupported by structured outputs) — bounds are enforced after parsing.
-const OUTPUT_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    summary: { type: "string" },
-    risk_score: { type: "integer" },
-    issues: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          title: { type: "string" },
-          severity: { type: "string", enum: ["critical", "advisory", "pass"] },
-          code: { type: "string" },
-          description: { type: "string" },
-          fix: { type: "string" },
-          location: { type: "string" },
-          confidence: { type: "string", enum: ["strong", "medium", "weak"] },
-          discipline: { type: "string", enum: DISCIPLINES },
-        },
-        required: [
-          "title",
-          "severity",
-          "code",
-          "description",
-          "fix",
-          "location",
-          "confidence",
-          "discipline",
-        ],
-      },
-    },
-  },
-  required: ["summary", "risk_score", "issues"],
-} as const;
 
 export type AnalyzeState = { error: string } | { ok: true } | null;
+
+function oneOf<T extends string>(value: unknown, allowed: T[], fallback: T): T {
+  return allowed.includes(value as T) ? (value as T) : fallback;
+}
+
+async function callGemini(
+  apiKey: string,
+  systemText: string,
+  base64: string,
+  mimeType: string,
+): Promise<RawResult> {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${apiKey}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: systemText }] },
+      contents: [
+        {
+          parts: [
+            { inline_data: { mime_type: mimeType, data: base64 } },
+            {
+              text: "Review this document for compliance against the adopted rules. Return only the JSON object.",
+            },
+          ],
+        },
+      ],
+      generationConfig: {
+        temperature: 0.1,
+        maxOutputTokens: 8000,
+        responseMimeType: "application/json",
+      },
+    }),
+  });
+
+  const data = await res.json();
+  if (data.error) {
+    throw new Error(
+      `Gemini error: ${data.error.message ?? JSON.stringify(data.error)}`,
+    );
+  }
+  const text: string =
+    data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+  if (!text) throw new Error("Gemini returned no analysis.");
+  return JSON.parse(text) as RawResult;
+}
 
 export async function analyzeDocument(
   projectId: string,
   documentId: string,
 ): Promise<AnalyzeState> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    return { error: "ANTHROPIC_API_KEY is not configured." };
+    return { error: "GEMINI_API_KEY is not configured." };
   }
 
   const supabase = await createClient();
@@ -116,7 +126,7 @@ export async function analyzeDocument(
   const municipalityId = doc.project?.municipality_id ?? null;
   const municipalityName = doc.project?.municipality?.name ?? "the municipality";
 
-  // 2. Load the adopted rules for the municipality (cached prefix per municipality).
+  // 2. Load the adopted rules for the municipality.
   const { data: rules, error: rulesErr } = municipalityId
     ? await supabase
         .from("municipality_rules")
@@ -127,9 +137,7 @@ export async function analyzeDocument(
     : { data: [], error: null };
   if (rulesErr) return { error: rulesErr.message };
   if (!rules || rules.length === 0) {
-    return {
-      error: `No compliance rules are loaded for ${municipalityName}.`,
-    };
+    return { error: `No compliance rules are loaded for ${municipalityName}.` };
   }
 
   // 3. Download the file from Storage and base64-encode it.
@@ -137,18 +145,19 @@ export async function analyzeDocument(
     .from(STORAGE_BUCKET)
     .download(doc.storage_path);
   if (dlErr || !blob) {
-    return { error: `Could not download document: ${dlErr?.message ?? "unknown"}` };
+    return {
+      error: `Could not download document: ${dlErr?.message ?? "unknown"}`,
+    };
   }
   const base64 = Buffer.from(await blob.arrayBuffer()).toString("base64");
   const mime = doc.mime_type || "application/pdf";
 
-  // Mark the document as analyzing.
   await supabase
     .from("documents")
     .update({ status: "analyzing" })
     .eq("id", documentId);
 
-  // 4. Build the (cacheable) system prompt from the DB rules.
+  // 4. Build the system prompt from the DB rules.
   const ruleLines = rules
     .map((r) => `- ${r.code} [${r.category}] ${r.title}: ${r.description}`)
     .join("\n");
@@ -157,84 +166,55 @@ export async function analyzeDocument(
 ADOPTED RULES — ${municipalityName}:
 ${ruleLines}
 
-Review the document against these rules only. For each rule you can actually check from the document, decide compliance and emit a finding:
-- severity: "critical" = likely permit rejection; "advisory" = potential issue or missing information; "pass" = compliant.
-- confidence: "strong" / "medium" / "weak" based on how clearly the document supports the finding.
-- code: the rule code (e.g. the §-reference) or the relevant standard.
-- location: a sheet/grid reference if identifiable, otherwise a short locus.
-- discipline: the discipline the finding belongs to.
-- fix: a specific action to achieve compliance, or "No action required" when passing.
-Also provide a 2–3 sentence plain-English "summary" and an integer "risk_score" from 0 (fully compliant) to 100 (severe violations). Only include rules actually checkable from this document.`;
-
-  // 5. Call Claude with the document + structured JSON output.
-  const client = new Anthropic({ apiKey });
-  let result: AnalysisResult;
-  try {
-    const response = await client.messages.create({
-      model: MODEL,
-      max_tokens: 8000,
-      system: [
-        {
-          type: "text",
-          text: systemText,
-          cache_control: { type: "ephemeral" },
-        },
-      ],
-      output_config: { format: { type: "json_schema", schema: OUTPUT_SCHEMA } },
-      messages: [
-        {
-          role: "user",
-          content: [
-            mime.startsWith("image/")
-              ? {
-                  type: "image",
-                  source: {
-                    type: "base64",
-                    media_type: mime as
-                      | "image/png"
-                      | "image/jpeg"
-                      | "image/gif"
-                      | "image/webp",
-                    data: base64,
-                  },
-                }
-              : {
-                  type: "document",
-                  source: {
-                    type: "base64",
-                    media_type: "application/pdf",
-                    data: base64,
-                  },
-                },
-            {
-              type: "text",
-              text: "Review this document for compliance against the adopted rules. Return only the structured JSON object.",
-            },
-          ],
-        },
-      ],
-    });
-
-    const textBlock = response.content.find((b) => b.type === "text");
-    if (!textBlock || textBlock.type !== "text") {
-      return { error: "Model returned no analysis." };
+Review the document against these rules only. Return ONLY a valid JSON object — no markdown, no preamble — with this exact shape:
+{
+  "summary": "2-3 sentence plain-English overview of the document and overall compliance posture",
+  "risk_score": 0-100 integer (0 = fully compliant, 100 = severe violations),
+  "issues": [
+    {
+      "title": "short descriptive title",
+      "severity": "critical" | "advisory" | "pass",
+      "code": "the rule code (e.g. the §-reference) or relevant standard",
+      "description": "what the document shows and why it may or may not comply — be specific with numbers/measurements",
+      "fix": "specific action to achieve compliance, or 'No action required' when passing",
+      "location": "sheet/grid reference if identifiable, else a short locus",
+      "confidence": "strong" | "medium" | "weak",
+      "discipline": "architectural" | "landscape" | "mep" | "mep_electrical" | "mep_plumbing" | "mep_mechanical" | "structural" | "survey" | "other"
     }
-    result = JSON.parse(textBlock.text) as AnalysisResult;
+  ]
+}
+severity: critical = likely permit rejection, advisory = potential issue or missing info, pass = compliant. Only include rules actually checkable from this document.`;
+
+  // 5. Call Gemini.
+  let raw: RawResult;
+  try {
+    raw = await callGemini(apiKey, systemText, base64, mime);
   } catch (e) {
     await supabase
       .from("documents")
       .update({ status: "pending" })
       .eq("id", documentId);
-    const msg = e instanceof Error ? e.message : "Analysis failed.";
-    return { error: msg };
+    return { error: e instanceof Error ? e.message : "Analysis failed." };
   }
 
-  // 6. Persist report + issues; update project + document status.
-  const issues = result.issues ?? [];
+  // 6. Normalize + persist.
+  const issues = (raw.issues ?? []).map((i) => ({
+    title: i.title?.trim() || "Untitled finding",
+    severity: oneOf<IssueSeverity>(i.severity, SEVERITIES, "advisory"),
+    description: i.description?.trim() || "",
+    code_ref: i.code?.trim() || null,
+    location: i.location?.trim() || null,
+    confidence: oneOf<IssueConfidence>(i.confidence, CONFIDENCES, "medium"),
+    discipline: oneOf<DocumentDiscipline>(i.discipline, DISCIPLINES, "other"),
+  }));
+
   const criticalCount = issues.filter((i) => i.severity === "critical").length;
   const warningCount = issues.filter((i) => i.severity === "advisory").length;
   const passCount = issues.filter((i) => i.severity === "pass").length;
-  const riskScore = Math.max(0, Math.min(100, Math.round(result.risk_score)));
+  const riskScore = Math.max(
+    0,
+    Math.min(100, Math.round(Number(raw.risk_score) || 0)),
+  );
 
   const reportId = crypto.randomUUID();
   const { error: reportErr } = await supabase.from("compliance_reports").insert({
@@ -242,26 +222,17 @@ Also provide a 2–3 sentence plain-English "summary" and an integer "risk_score
     document_id: documentId,
     project_id: projectId,
     risk_score: riskScore,
-    summary: result.summary,
+    summary: raw.summary?.trim() || null,
     critical_count: criticalCount,
     warning_count: warningCount,
     pass_count: passCount,
-    ai_provider: "claude",
+    ai_provider: "gemini",
   });
   if (reportErr) return { error: reportErr.message };
 
   if (issues.length > 0) {
     const { error: issuesErr } = await supabase.from("issues").insert(
-      issues.map((i) => ({
-        report_id: reportId,
-        severity: i.severity,
-        title: i.title,
-        description: i.description,
-        code_ref: i.code,
-        location: i.location,
-        confidence: i.confidence,
-        discipline: i.discipline,
-      })),
+      issues.map((i) => ({ report_id: reportId, ...i })),
     );
     if (issuesErr) return { error: issuesErr.message };
   }
